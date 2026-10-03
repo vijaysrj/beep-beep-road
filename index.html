@@ -24,8 +24,8 @@
   .home{pointer-events:auto;width:62px;height:62px;border-radius:20px;border:4px solid var(--ink);background:var(--white);box-shadow:0 5px 0 var(--ink);font-size:30px;cursor:pointer;padding:0}
   .home:active{transform:translateY(4px);box-shadow:0 1px 0 var(--ink)}
   .start.hidden{display:none}
-  .horn{pointer-events:auto;width:78px;height:78px;border-radius:50%;border:4px solid var(--ink);background:var(--sun);font-size:36px;box-shadow:0 6px 0 var(--ink);cursor:pointer}
-  .horn:active{transform:translateY(5px);box-shadow:0 1px 0 var(--ink)}
+  #hub{transform-origin:50px 50px;transition:transform .08s}
+  #hub.on{transform:scale(.86)}
   .controls{position:fixed;bottom:14px;left:10px;right:10px;display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none}
   .pad{pointer-events:auto;width:80px;height:80px;border-radius:26px;border:4px solid var(--ink);background:var(--white);box-shadow:0 6px 0 var(--ink);display:grid;place-items:center;cursor:pointer;touch-action:none}
   .pad.on{transform:translateY(5px);box-shadow:0 1px 0 var(--ink);background:var(--sun)}
@@ -57,17 +57,20 @@
     <span id="stars">0</span>
   </div>
   </div>
-  <button class="horn" id="horn" aria-label="Honk the horn">📯</button>
 </div>
 
 <div class="controls">
   <button class="pad" id="left" aria-label="Steer left"><svg viewBox="0 0 24 24"><path d="M15 4L7 12l8 8" fill="none" stroke="#2B2D42" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-  <div class="wheel" id="wheel" aria-label="Steering wheel">
+  <div class="wheel" id="wheel" aria-label="Steering wheel. Press the middle to honk">
     <svg viewBox="0 0 100 100" id="wheelSvg">
       <circle cx="50" cy="50" r="44" fill="none" stroke="#2B2D42" stroke-width="14"/>
       <circle cx="50" cy="50" r="44" fill="none" stroke="#EF476F" stroke-width="8" id="rim"/>
       <path d="M50 50 L10 54 M50 50 L90 54 M50 50 L50 92" stroke="#2B2D42" stroke-width="9" stroke-linecap="round"/>
-      <circle cx="50" cy="50" r="14" fill="#FFD23F" stroke="#2B2D42" stroke-width="4"/>
+      <g id="hub">
+        <circle cx="50" cy="50" r="22" fill="#FFD23F" stroke="#2B2D42" stroke-width="4"/>
+        <path d="M38 46 h6 l12 -8 v24 l-12 -8 h-6 z" fill="#2B2D42"/>
+        <path d="M60 44 q4 6 0 12 M64 40 q7 10 0 20" fill="none" stroke="#2B2D42" stroke-width="3" stroke-linecap="round"/>
+      </g>
       <rect x="45" y="2" width="10" height="12" rx="3" fill="#FFFDF7" stroke="#2B2D42" stroke-width="3"/>
     </svg>
   </div>
@@ -85,11 +88,11 @@
 <script>
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 const VEHICLES = [
-  {id:'race',   name:'Race car',   color:'#8E5BD8', sound:'VROOM!',    long:false},
+  {id:'race',   name:'Race car',   color:'#8E5BD8', sound:'BEEP!',      long:false},
   {id:'sedan',  name:'Family car', color:'#118AB2', sound:'BEEP BEEP!',long:false},
   {id:'jeep',   name:'Jeep',       color:'#FF9F1C', sound:'HONK!',     long:false},
-  {id:'police', name:'Police car', color:'#2B2D42', sound:'WEE-WOO!',  long:false},
-  {id:'fire',   name:'Fire truck', color:'#E63946', sound:'NEE-NAW!',  long:true},
+  {id:'police', name:'Police car', color:'#2B2D42', sound:'BEEP BEEP!',long:false},
+  {id:'fire',   name:'Fire truck', color:'#E63946', sound:'HONK!',     long:true},
   {id:'bus',    name:'School bus', color:'#FFB703', sound:'HONK HONK!',long:true},
 ];
 const INK = '#2B2D42';
@@ -116,31 +119,54 @@ addEventListener('resize', resize); resize();
 
 /* ---------- sound ---------- */
 let ac;
-function audio(){ if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)(); if(ac.state==='suspended') ac.resume(); }
+let master;
+function audio(){
+  if(!ac){
+    ac = new (window.AudioContext||window.webkitAudioContext)();
+    const comp = ac.createDynamicsCompressor();
+    master = ac.createGain(); master.gain.value = 1;
+    master.connect(comp).connect(ac.destination);
+  }
+  if(ac.state==='suspended') ac.resume();
+}
 function tone(f,d,type='sine',vol=.2,slide=0,delay=0){
   if(!ac) return;
   const t = ac.currentTime+delay, o = ac.createOscillator(), g = ac.createGain();
   o.type=type; o.frequency.setValueAtTime(f,t);
   if(slide) o.frequency.exponentialRampToValueAtTime(slide,t+d);
   g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(.001,t+d);
-  o.connect(g).connect(ac.destination); o.start(t); o.stop(t+d);
+  o.connect(g).connect(master); o.start(t); o.stop(t+d);
 }
 const sfx = {
   star(){ tone(880,.12,'triangle',.25); tone(1320,.18,'triangle',.2,0,.08); },
-  honk(){
-    switch(vehicle.id){
-      case 'race':   tone(110,.7,'sawtooth',.12,520); break;
-      case 'sedan':  tone(520,.12,'square',.1); tone(520,.12,'square',.1,0,.2); break;
-      case 'jeep':   tone(220,.4,'square',.12); tone(277,.4,'square',.1); break;
-      case 'police': [0,.3,.6,.9].forEach((d,i)=>tone(i%2?720:960,.28,'square',.07,0,d)); break;
-      case 'fire':   tone(500,.6,'sawtooth',.07,1100); tone(1100,.6,'sawtooth',.07,500,.6); break;
-      case 'bus':    tone(150,.55,'square',.14); tone(190,.55,'square',.12); break;
-    }
-  },
   boing(){ tone(200,.4,'sine',.3,600); },
   bump(){ tone(90,.08,'triangle',.18,60); },
   yay(){ [523,659,784,1047].forEach((f,i)=>tone(f,.25,'triangle',.2,0,i*.12)); }
 };
+
+/* real car horns are two notes played together; bigger vehicles are deeper */
+const HORN = {race:[466,587], sedan:[415,523], jeep:[349,440], police:[392,494], fire:[233,294], bus:[196,247]};
+let hornNodes=null, honking=false;
+function hornOn(){
+  audio(); if(hornNodes) return;
+  const t=ac.currentTime, [a,b]=HORN[vehicle.id];
+  const shaper=ac.createWaveShaper(), curve=new Float32Array(256);
+  for(let i=0;i<256;i++){ const x=i/128-1; curve[i]=(1+6)*x/(1+6*Math.abs(x)); }
+  shaper.curve=curve;
+  const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=2600;
+  const g=ac.createGain(); g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(.9,t+.015);
+  const oscs=[a,b].map(f=>{ const o=ac.createOscillator(); o.type='sawtooth'; o.frequency.value=f; const og=ac.createGain(); og.gain.value=.6; o.connect(og).connect(shaper); o.start(t); return o; });
+  shaper.connect(lp).connect(g).connect(master);
+  hornNodes={oscs,g,start:t}; honking=true;
+}
+function hornOff(){
+  honking=false;
+  if(!hornNodes) return;
+  const n=hornNodes; hornNodes=null;
+  const t=Math.max(ac.currentTime, n.start+.22);     // even a quick tap gives a proper beep
+  n.g.gain.setValueAtTime(.9,t); n.g.gain.linearRampToValueAtTime(0,t+.04);
+  n.oscs.forEach(o=>o.stop(t+.06));
+}
 
 /* ---------- drawing ---------- */
 function drawCar(c,x,y,s,v,tilt=0){
@@ -315,6 +341,7 @@ function loop(){
   let tilt = steer*0.35 + (wobble>0 ? Math.sin(wobble*.7)*.25 : 0);
   if(wobble>0) wobble--;
   drawCar(ctx, carX+shake, carY + (honkT>0?Math.sin(honkT)*4:0), vehicle.long?1.05:1.2, vehicle, tilt);
+  if(honking) honkT=Math.max(honkT,16);
   if(honkT>0){ honkT--; ctx.font='800 34px "Baloo 2", sans-serif'; ctx.fillStyle='#FFFDF7'; ctx.strokeStyle=INK; ctx.lineWidth=6; ctx.textAlign='center'; const ty=carY-(vehicle.long?95:80); ctx.strokeText(vehicle.sound,carX,ty); ctx.fillText(vehicle.sound,carX,ty); }
   for(const p of bits){ p.x+=p.vx; p.y+=p.vy; p.vy+=.4; p.life--; ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,p.r+5,p.r+5); }
   bits = bits.filter(p=>p.life>0);
@@ -324,7 +351,7 @@ function loop(){
 function resetGame(){
   stars=0; document.getElementById('stars').textContent=0;
   items=[]; bits=[]; scroll=0; spawnT=40; honkT=0; wobble=0;
-  steer=0; padSteer=0; wheelAngle=0; wheelHeld=false;
+  steer=0; padSteer=0; wheelAngle=0; wheelHeld=false; hornOff();
   document.getElementById('cheer').classList.remove('show');
 }
 function goHome(){
@@ -341,7 +368,7 @@ VEHICLES.forEach(v=>{
   const label=document.createElement('span'); label.textContent=v.name; b.appendChild(label);
   drawCar(c.getContext('2d'),90,110,v.long?1.35:1.75,v);
   b.onclick=()=>{
-    vehicle=v; audio(); sfx.honk();
+    vehicle=v; hornOn(); setTimeout(hornOff,300); honkT=30;
     document.getElementById('rim').setAttribute('stroke', v.id==='police' ? '#3A6FD8' : v.color);
     document.getElementById('start').classList.add('hidden');
     cancelAnimationFrame(rafId); resetGame();
@@ -360,18 +387,31 @@ function holdPad(id,dir){
 }
 holdPad('left',-1); holdPad('right',1);
 
-// turn the wheel by dragging around it
-const wheel=document.getElementById('wheel');
-let startAng=0, startWheel=0;
-const angAt=e=>{ const r=wheel.getBoundingClientRect(); return Math.atan2(e.clientY-(r.top+r.height/2), e.clientX-(r.left+r.width/2))*180/Math.PI; };
-wheel.addEventListener('pointerdown',e=>{ e.preventDefault(); audio(); wheelHeld=true; startAng=angAt(e); startWheel=wheelAngle; wheel.setPointerCapture(e.pointerId); });
+// the wheel: press the middle to honk, drag the rim to steer
+const wheel=document.getElementById('wheel'), hub=document.getElementById('hub');
+let startAng=0, startWheel=0, steerPtr=null, hornPtr=null;
+const center=()=>{ const r=wheel.getBoundingClientRect(); return [r.left+r.width/2, r.top+r.height/2, r.width]; };
+const angAt=e=>{ const [cx,cy]=center(); return Math.atan2(e.clientY-cy, e.clientX-cx)*180/Math.PI; };
+wheel.addEventListener('pointerdown',e=>{
+  e.preventDefault(); audio();
+  const [cx,cy,w]=center();
+  wheel.setPointerCapture(e.pointerId);
+  if(Math.hypot(e.clientX-cx, e.clientY-cy) < w*0.26){
+    hornPtr=e.pointerId; hub.classList.add('on'); hornOn();
+  } else {
+    steerPtr=e.pointerId; wheelHeld=true; startAng=angAt(e); startWheel=wheelAngle;
+  }
+});
 wheel.addEventListener('pointermove',e=>{
-  if(!wheelHeld) return;
+  if(e.pointerId!==steerPtr) return;
   let d=angAt(e)-startAng; if(d>180) d-=360; if(d<-180) d+=360;
   wheelAngle=Math.max(-100,Math.min(100,startWheel+d));
 });
-const letGo=()=>{ wheelHeld=false; };
-wheel.addEventListener('pointerup',letGo); wheel.addEventListener('pointercancel',letGo);
+const letGo=e=>{
+  if(e.pointerId===hornPtr){ hornPtr=null; hub.classList.remove('on'); hornOff(); }
+  if(e.pointerId===steerPtr){ steerPtr=null; wheelHeld=false; }
+};
+wheel.addEventListener('pointerup',letGo); wheel.addEventListener('pointercancel',letGo); wheel.addEventListener('lostpointercapture',letGo);
 
 // holding anywhere on the road also steers toward that side
 cv.addEventListener('pointerdown',e=>{ if(!running) return; audio(); padSteer = e.clientX<carX?-1:1; cv.setPointerCapture(e.pointerId); });
@@ -379,10 +419,9 @@ cv.addEventListener('pointerup',()=>padSteer=0);
 cv.addEventListener('pointercancel',()=>padSteer=0);
 
 document.getElementById('home').addEventListener('click',goHome);
-document.getElementById('horn').addEventListener('pointerdown',e=>{ e.preventDefault(); audio(); sfx.honk(); honkT=40; });
 const keys={};
-addEventListener('keydown',e=>{ keys[e.key]=1; if(e.key===' '){ audio(); sfx.honk(); honkT=40; } padSteer=(keys.ArrowRight?1:0)-(keys.ArrowLeft?1:0); });
-addEventListener('keyup',e=>{ keys[e.key]=0; padSteer=(keys.ArrowRight?1:0)-(keys.ArrowLeft?1:0); });
+addEventListener('keydown',e=>{ keys[e.key]=1; if(e.key===' ' && !e.repeat && running) hornOn(); padSteer=(keys.ArrowRight?1:0)-(keys.ArrowLeft?1:0); });
+addEventListener('keyup',e=>{ keys[e.key]=0; if(e.key===' ') hornOff(); padSteer=(keys.ArrowRight?1:0)-(keys.ArrowLeft?1:0); });
 </script>
 
 </body>
