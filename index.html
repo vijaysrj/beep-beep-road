@@ -202,7 +202,7 @@ const sfx = {
 /* real car horns are two notes played together; bigger vehicles are deeper */
 const HORN = {race:[466,587], sedan:[415,523], jeep:[349,440], police:[392,494], fire:[233,294], bus:[196,247]};
 let hornNodes=null, honking=false;
-function hornOn(){
+var hornOn = function(){
   audio(); if(hornNodes) return;
   const t=ac.currentTime, [a,b]=HORN[vehicle.id];
   const shaper=ac.createWaveShaper(), curve=new Float32Array(256);
@@ -214,13 +214,89 @@ function hornOn(){
   shaper.connect(lp).connect(g).connect(master);
   hornNodes={oscs,g,start:t}; honking=true;
 }
-function hornOff(){
+var hornOff = function(){
   honking=false;
   if(!hornNodes) return;
   const n=hornNodes; hornNodes=null;
   const t=Math.max(ac.currentTime, n.start+.22);     // even a quick tap gives a proper beep
   n.g.gain.setValueAtTime(.9,t); n.g.gain.linearRampToValueAtTime(0,t+.04);
   n.oscs.forEach(o=>o.stop(t+.06));
+}
+
+/* ---------- Home Screen web app sound ----------
+   iPhone web apps opened from the Home Screen often silence the Web Audio
+   engine. There, every sound is pre-built into a small WAV file and played
+   through normal <audio> players instead, which web apps are allowed to use. */
+const STANDALONE = navigator.standalone===true || matchMedia('(display-mode: standalone)').matches;
+if(STANDALONE){
+  const RATE=22050;
+  const wave=(type,ph)=>{ const x=ph%1;
+    if(type==='square') return x<.5?1:-1;
+    if(type==='sawtooth') return 2*x-1;
+    if(type==='triangle') return 1-4*Math.abs(x-.5);
+    return Math.sin(ph*2*Math.PI); };
+  // same parameters as tone(): frequency, length, wave, volume, slide-to, delay
+  function render(tones){
+    const len=Math.max(...tones.map(t=>(t[5]||0)+t[1]))+.02, buf=new Float32Array(Math.ceil(len*RATE));
+    for(const [f,d,type='sine',vol=.2,slide=0,delay=0] of tones){
+      let ph=0; const s0=Math.floor(delay*RATE), n=Math.floor(d*RATE);
+      for(let i=0;i<n;i++){ const k=i/n, fr=slide? f*Math.pow(slide/f,k) : f; ph+=fr/RATE;
+        buf[s0+i]+=wave(type,ph)*vol*Math.pow(.001/vol,k)*2.2; }
+    }
+    return buf;
+  }
+  function hornLoop([a,b]){             // 2 seconds of two-note horn that loops seamlessly
+    const n=2*RATE, buf=new Float32Array(n); let lp=0; const al=1-Math.exp(-2*Math.PI*2600/RATE);
+    for(let i=0;i<n;i++){ const t=i/RATE; let x=.6*(2*((a*t)%1)-1)+.6*(2*((b*t)%1)-1); x=x/2; x=7*x/(1+6*Math.abs(x)); lp+=al*(x-lp); buf[i]=lp*.85; }
+    return buf;
+  }
+  function wavURL(f){
+    const n=f.length, b=new ArrayBuffer(44+n*2), v=new DataView(b);
+    const w=(o,str)=>{ for(let i=0;i<str.length;i++) v.setUint8(o+i,str.charCodeAt(i)); };
+    w(0,'RIFF'); v.setUint32(4,36+n*2,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true);
+    v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,RATE,true); v.setUint32(28,RATE*2,true);
+    v.setUint16(32,2,true); v.setUint16(34,16,true); w(36,'data'); v.setUint32(40,n*2,true);
+    for(let i=0;i<n;i++) v.setInt16(44+i*2, Math.max(-1,Math.min(1,f[i]))*32767, true);
+    return URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
+  }
+  const pools={};
+  function pool(name,samples,count){
+    const url=wavURL(samples);
+    pools[name]={i:0, els:Array.from({length:count},()=>{ const e=new Audio(url); e.preload='auto'; e.setAttribute('playsinline',''); return e; })};
+  }
+  pool('star',  render([[880,.12,'triangle',.25],[1320,.18,'triangle',.2,0,.08]]),4);
+  pool('boing', render([[200,.4,'sine',.3,600]]),2);
+  pool('bump',  render([[90,.08,'triangle',.18,60]]),3);
+  pool('yay',   render([523,659,784,1047].map((f,i)=>[f,.25,'triangle',.2,0,i*.12])),1);
+  for(const id in HORN){ pool('horn-'+id, hornLoop(HORN[id]), 1); pools['horn-'+id].els[0].loop=true; }
+
+  // iPhone needs each player started once during a tap; do it silently on the first tap
+  let unlocked=false;
+  const unlock=()=>{ if(unlocked) return; unlocked=true;
+    for(const k in pools) for(const e of pools[k].els){
+      if(e._live) continue;
+      e.muted=true;
+      e.play().then(()=>{ if(!e._live){ e.pause(); e.currentTime=0; } e.muted=false; }).catch(()=>{ e.muted=false; });
+    } };
+  ['touchend','click'].forEach(ev=>document.addEventListener(ev,unlock,{capture:true,passive:true}));
+
+  const playPool=name=>{ const p=pools[name], e=p.els[p.i++%p.els.length];
+    e._live=true; e.muted=false; e.onended=()=>{ e._live=false; };
+    try{ e.currentTime=0; }catch(_){} e.play().catch(()=>{}); };
+  sfx.star=()=>playPool('star'); sfx.boing=()=>playPool('boing'); sfx.bump=()=>playPool('bump'); sfx.yay=()=>playPool('yay');
+
+  let hornEl=null, hornStart=0;
+  hornOn=function(){
+    if(hornEl) return;
+    hornEl=pools['horn-'+vehicle.id].els[0]; hornEl._live=true; hornEl.muted=false;
+    try{ hornEl.currentTime=0; }catch(_){} hornEl.play().catch(()=>{});
+    hornStart=performance.now(); honking=true;
+  };
+  hornOff=function(){
+    honking=false; if(!hornEl) return;
+    const e=hornEl; hornEl=null;
+    setTimeout(()=>{ e.pause(); e._live=false; }, Math.max(0, 220-(performance.now()-hornStart)));
+  };
 }
 
 /* ---------- drawing ---------- */
