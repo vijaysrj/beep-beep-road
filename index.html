@@ -127,8 +127,12 @@ function audio(){
     master = ac.createGain(); master.gain.value = 1;
     master.connect(comp).connect(ac.destination);
   }
-  if(ac.state==='suspended') ac.resume();
+  if(ac.state!=='running') ac.resume();      // also wakes audio after switching apps
 }
+// iPhone: play game sounds like media, even when the phone is on silent
+if(navigator.audioSession){ try{ navigator.audioSession.type='playback'; }catch(e){} }
+// iPhone only unlocks sound on a finished tap, so retry on every tap
+['touchend','click'].forEach(ev=>document.addEventListener(ev,()=>{ audio(); },{passive:true}));
 function tone(f,d,type='sine',vol=.2,slide=0,delay=0){
   if(!ac) return;
   const t = ac.currentTime+delay, o = ac.createOscillator(), g = ac.createGain();
