@@ -23,7 +23,21 @@
   .left{display:flex;gap:10px;align-items:center}
   .home{pointer-events:auto;width:62px;height:62px;border-radius:20px;border:4px solid var(--ink);background:var(--white);box-shadow:0 5px 0 var(--ink);font-size:30px;cursor:pointer;padding:0}
   .home:active{transform:translateY(4px);box-shadow:0 1px 0 var(--ink)}
-  .start.hidden{display:none}
+  .start.hidden,.end.hidden{display:none}
+  .timer{background:var(--white);border:4px solid var(--ink);border-radius:28px;padding:4px 16px 0;font-size:30px;line-height:1.2;box-shadow:0 5px 0 var(--ink);display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}
+  .timer svg{width:30px;height:30px;margin-top:-4px}
+  .timer.low{background:var(--sun);animation:pulse 1s infinite}
+  .timer.off{display:none}
+  @keyframes pulse{50%{transform:scale(1.08)}}
+  .time-pick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;font-size:20px}
+  .chip{font:inherit;font-size:20px;min-width:58px;padding:4px 12px 0;border-radius:20px;border:3px solid var(--ink);background:var(--white);box-shadow:0 4px 0 var(--ink);color:var(--ink);cursor:pointer}
+  .chip.sel{background:var(--sun)}
+  .end{position:fixed;inset:0;background:rgba(158,227,245,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:20px}
+  .end h2{margin:0;font-size:clamp(52px,14vw,96px);line-height:1;transform:rotate(-3deg)}
+  .end .got{font-size:34px;display:flex;align-items:center;gap:8px}
+  .end .got svg{width:44px;height:44px;margin-top:-6px}
+  .end button{font:inherit;font-size:30px;padding:10px 30px 4px;border-radius:28px;border:4px solid var(--ink);background:var(--sun);box-shadow:0 6px 0 var(--ink);color:var(--ink);cursor:pointer}
+  .end button:active{transform:translateY(5px);box-shadow:0 1px 0 var(--ink)}
   #hub{transform-origin:50px 50px;transition:transform .08s}
   #hub.on{transform:scale(.86)}
   .controls{position:fixed;bottom:14px;left:10px;right:10px;display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none}
@@ -57,6 +71,10 @@
     <span id="stars">0</span>
   </div>
   </div>
+  <div class="timer" id="timer" aria-label="Time left">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="9" fill="#FFFDF7" stroke="#2B2D42" stroke-width="2.5"/><path id="pie" fill="#118AB2"/><path d="M10 2h4" stroke="#2B2D42" stroke-width="2.5" stroke-linecap="round"/></svg>
+    <span id="clock">3:00</span>
+  </div>
 </div>
 
 <div class="controls">
@@ -83,6 +101,16 @@
   <h1>Beep Beep<br>Road</h1>
   <p>Pick your ride!</p>
   <div class="cars" id="cars"></div>
+  <div class="time-pick" id="timePick"><span>Drive time:</span></div>
+</div>
+
+<div class="end hidden" id="end">
+  <h2>All done! 🏁</h2>
+  <canvas id="endCar" width="180" height="220" style="width:110px;height:134px"></canvas>
+  <div class="got">You got
+    <svg viewBox="0 0 24 24"><path d="M12 2l3 6.5 7 .8-5.2 4.8 1.4 7L12 17.6 5.8 21.1l1.4-7L2 9.3l7-.8z" fill="#FFD23F" stroke="#2B2D42" stroke-width="2" stroke-linejoin="round"/></svg>
+    <span id="endStars">0</span></div>
+  <button id="endHome">🏠 Home</button>
 </div>
 
 <script>
@@ -100,6 +128,9 @@ let W, H, roadW, amp, carY;
 let vehicle = VEHICLES[0], running = false;
 let carX = 0, steer = 0, wobble = 0, stars = 0, scroll = 0, speed = 3.5;
 let items = [], bits = [], spawnT = 40, honkT = 0, rumbleT = 0;
+/* drive time: change DEFAULT_MINUTES to set what's picked when the game opens */
+const DEFAULT_MINUTES = 3, TIME_CHOICES = [1,3,5,10,0];   // 0 = no limit
+let timeLimit = DEFAULT_MINUTES*60, timeLeft = timeLimit, lastT = 0, ending = false, slow = 1;
 
 /* the road winds gently left and right */
 function roadCenter(y){
@@ -132,7 +163,27 @@ function audio(){
 // iPhone: play game sounds like media, even when the phone is on silent
 if(navigator.audioSession){ try{ navigator.audioSession.type='playback'; }catch(e){} }
 // iPhone only unlocks sound on a finished tap, so retry on every tap
-['touchend','click'].forEach(ev=>document.addEventListener(ev,()=>{ audio(); },{passive:true}));
+// Home Screen apps on iPhone can keep web sounds muted. Playing a tiny silent
+// track through a normal <audio> player switches the page to "media" sound,
+// which lets the horn and chimes through.
+let unlockEl;
+function mediaUnlock(){
+  if(!unlockEl){
+    const n=4000, buf=new ArrayBuffer(44+n), v=new DataView(buf);
+    const w=(o,str)=>{ for(let i=0;i<str.length;i++) v.setUint8(o+i,str.charCodeAt(i)); };
+    w(0,'RIFF'); v.setUint32(4,36+n,true); w(8,'WAVE'); w(12,'fmt ');
+    v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+    v.setUint32(24,8000,true); v.setUint32(28,8000,true); v.setUint16(32,1,true); v.setUint16(34,8,true);
+    w(36,'data'); v.setUint32(40,n,true);
+    for(let i=0;i<n;i++) v.setUint8(44+i,128);
+    unlockEl=document.createElement('audio');
+    unlockEl.src=URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+    unlockEl.loop=true; unlockEl.setAttribute('playsinline','');
+  }
+  if(unlockEl.paused) unlockEl.play().catch(()=>{});
+}
+['touchend','click'].forEach(ev=>document.addEventListener(ev,()=>{ mediaUnlock(); audio(); },{passive:true}));
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden && ac){ ac.resume(); if(unlockEl) unlockEl.play().catch(()=>{}); } });
 function tone(f,d,type='sine',vol=.2,slide=0,delay=0){
   if(!ac) return;
   const t = ac.currentTime+delay, o = ac.createOscillator(), g = ac.createGain();
@@ -313,10 +364,17 @@ function loop(){
   updateSteer();
   const roadC = roadCenter(carY);
   const offRoad = Math.abs(carX-roadC) > roadW/2 - 18;
-  const v = offRoad ? speed*0.55 : speed;
+  const now = performance.now(), dt = Math.min(.1, (now-lastT)/1000); lastT = now;
+  if(timeLimit && !ending){
+    timeLeft -= dt;
+    if(timeLeft<=0){ timeLeft=0; ending=true; padSteer=0; wheelHeld=false; hornOff(); }
+    showClock();
+  }
+  if(ending){ slow -= dt/1.5; if(slow<=0){ finish(); return; } }
+  const v = (offRoad ? speed*0.55 : speed) * slow;
   scroll += v;
   if(--spawnT<=0){ spawn(); spawnT = 60+Math.random()*40; }
-  carX += steer*7;
+  carX += steer*7*slow;
   carX = Math.max(30, Math.min(W-30, carX));
 
   drawWorld();
@@ -352,7 +410,26 @@ function loop(){
   rafId=requestAnimationFrame(loop);
 }
 
+function showClock(){
+  const t=Math.ceil(timeLeft), el=document.getElementById('timer');
+  el.classList.toggle('off', !timeLimit);
+  if(!timeLimit) return;
+  document.getElementById('clock').textContent = Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
+  el.classList.toggle('low', timeLeft<=10);
+  // the little clock face empties as time runs out
+  const f=timeLeft/timeLimit, a=-Math.PI/2+f*Math.PI*2, x=12+8*Math.cos(a), y=13+8*Math.sin(a);
+  document.getElementById('pie').setAttribute('d', f>=.999 ? 'M12 5a8 8 0 1 1 -.01 0z' : f<=0 ? '' : `M12 13 L12 5 A8 8 0 ${f>.5?1:0} 1 ${x} ${y} Z`);
+}
+function finish(){
+  running=false; cancelAnimationFrame(rafId);
+  document.getElementById('endStars').textContent=stars;
+  const ec=document.getElementById('endCar').getContext('2d'); ec.clearRect(0,0,180,220);
+  steer=0; drawCar(ec,90,110,vehicle.long?1.35:1.75,vehicle);
+  document.getElementById('end').classList.remove('hidden');
+  sfx.yay();
+}
 function resetGame(){
+  timeLeft=timeLimit; ending=false; slow=1; lastT=performance.now(); showClock();
   stars=0; document.getElementById('stars').textContent=0;
   items=[]; bits=[]; scroll=0; spawnT=40; honkT=0; wobble=0;
   steer=0; padSteer=0; wheelAngle=0; wheelHeld=false; hornOff();
@@ -361,8 +438,19 @@ function resetGame(){
 function goHome(){
   running=false; cancelAnimationFrame(rafId);
   resetGame();
+  document.getElementById('end').classList.add('hidden');
   document.getElementById('start').classList.remove('hidden');
 }
+document.getElementById('endHome').addEventListener('click',goHome);
+
+// drive-time choices on the start screen
+const tp=document.getElementById('timePick');
+TIME_CHOICES.forEach(m=>{
+  const b=document.createElement('button'); b.className='chip'+(m===DEFAULT_MINUTES?' sel':'');
+  b.textContent = m ? m+' min' : '∞'; b.setAttribute('aria-label', m ? m+' minutes' : 'No time limit');
+  b.onclick=()=>{ timeLimit=m*60; tp.querySelectorAll('.chip').forEach(c=>c.classList.remove('sel')); b.classList.add('sel'); };
+  tp.appendChild(b);
+});
 
 /* ---------- start screen ---------- */
 const carsEl=document.getElementById('cars');
